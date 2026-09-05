@@ -2,7 +2,7 @@
 
 Living progress tracker for the Ecommerce Order Processing System. Updated at the end of each sprint.
 
-**Last updated:** Saturday, 5 September 2026, mid Sprint 5 (Swagger UI landed)
+**Last updated:** Saturday, 5 September 2026, mid Sprint 5 (Swagger UI and README landed)
 **Suite:** 138 tests, 0 failures, 0 skipped (`gradlew clean test`)
 
 Plan: [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) · Design: [`DESIGN.md`](./DESIGN.md) · Callable examples: [`API_EXAMPLES.md`](./API_EXAMPLES.md)
@@ -17,7 +17,7 @@ Plan: [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) · Design: [`DESIGN.md`](./DESIGN.md)
 | **2** | Listing, filtering, pagination | 5 | **Done** | +53 → 76 |
 | **3** | Cancellation and safe state transitions | 6 | **Done** | +31 → 107 |
 | **4** | Background promotion job | 4 | **Done** | +24 → 131 |
-| **5** | API docs, README, hardening | extras | **In progress** — Swagger UI done, README open | +7 → 138 |
+| **5** | API docs, README, hardening | extras | **In progress** — Swagger UI and README done, edge-case sweep open | +7 → 138 |
 
 Progress: **4 of 5 sprints**, **all 6 requirements** functionally delivered.
 
@@ -34,7 +34,7 @@ Progress: **4 of 5 sprints**, **all 6 requirements** functionally delivered.
 | 5 | List all orders, optional status filter | **Live** | `GET /api/v1/orders`, `?status=`, paging and sorting |
 | 6 | Cancel only when `PENDING` | **Live** | `POST /api/v1/orders/{orderId}/cancel` → `200` / `409` / `404` / `400`, refused in SQL |
 
-Requested extras: pagination **done** (Sprint 2); Swagger UI **done** (Sprint 5); README still open.
+Requested extras: pagination **done** (Sprint 2); Swagger UI and README **done** (Sprint 5). All three requested extras delivered.
 
 ---
 
@@ -207,7 +207,7 @@ Task S5.1, interactive API documentation, is done. The README (S5.2) and the fin
 | 5.3 `@Tag` / `@Operation` / `@ApiResponses` on every endpoint, failures included | **Done** |
 | 5.4 `@Schema` examples on request and response DTOs | **Done** |
 | 5.5 Tests asserting the generated spec | **Done** — 7 tests |
-| 5.6 README | Open |
+| 5.6 README | **Done** |
 | 5.7 Final edge-case sweep | Open |
 
 ### 8.1 The spec is asserted, not eyeballed
@@ -223,6 +223,12 @@ The controller previously declared no `produces`, so every documented response c
 Against a running app: `/swagger-ui.html` redirects to the bundled UI and renders "Ecommerce Order Processing API v1 (OAS 3.1)" with no error banner, all four operations under the `Orders` tag, `200` / `400` / `404` / `409` listed on cancel, and the create body pre-filled from the `@Schema` examples. `/v3/api-docs` reports `"openapi": "3.1.0"`.
 
 One cosmetic note: Swagger UI renders the `unitPrice` example as `25` rather than `25.00`, because it parses the example as a number and drops the trailing zeros. The payload is still valid and the API accepts it.
+
+### 8.4 The README
+
+Covers all seven items `DESIGN.md` §14 asked for. Two choices about emphasis: it leads with the cancel-versus-scheduler race and shows the read-then-write that does *not* work before the conditional `UPDATE` that does, because that is the only part of a six-endpoint CRUD service worth a reviewer's attention; and it states the known limitations concretely — non-idempotent create first, then the scheduler running on every instance in a multi-pod deployment — rather than listing them as generic future work.
+
+Every factual claim in it was checked against the code rather than the plan: the test count, the 33 smoke checks, `@BatchSize` and its query-count guard, the absence of seed data, and the fact that no H2 console is exposed.
 
 ---
 
@@ -250,8 +256,7 @@ One cosmetic note: Swagger UI renders the `unitPrice` example as `25` rather tha
 
 | Item | Where it lands |
 |------|----------------|
-| README | Sprint 5, next |
-| Final edge-case sweep | Sprint 5 |
+| Final edge-case sweep | Sprint 5, next |
 | Four accepted test gaps from Sprint 1 | Deferred, `DESIGN.md` §17.5 |
 
 ---
