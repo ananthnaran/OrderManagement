@@ -120,6 +120,18 @@ public class OrderServiceImpl implements OrderService {
         return OrderMapper.toResponse(cancelled);
     }
 
+    @Override
+    @Transactional
+    public int promotePendingOrders() {
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+
+        int promoted = orderRepository.promoteAllPending(now);
+        if (promoted > 0) {
+            log.info("Promoted {} pending order(s) to PROCESSING", promoted);
+        }
+        return promoted;
+    }
+
     private Order findOrThrow(UUID orderId) {
         return orderRepository.findWithItemsById(orderId)
                 .orElseThrow(() -> new OrderNotFoundException(orderId));

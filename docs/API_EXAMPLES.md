@@ -429,9 +429,52 @@ curl -s -X POST http://localhost:8080/api/v1/orders/not-a-uuid/cancel
 
 ---
 
-## 6. Run the whole collection at once
+## 6. The background promotion job
 
-Both scripts exercise every call above and assert the status codes.
+Not an API call — a scheduled task promotes every `PENDING` order to `PROCESSING` once a minute, so an order advances on its own with no client involvement.
+
+```bash
+# Create an order, wait a minute, and watch it move
+curl -s -X POST http://localhost:8080/api/v1/orders -H 'Content-Type: application/json' -d '{...}'
+curl -s 'http://localhost:8080/api/v1/orders?status=PENDING'      # the new order
+sleep 60
+curl -s 'http://localhost:8080/api/v1/orders?status=PROCESSING'   # it has moved
+```
+
+A minute is a long time to watch a terminal, so the interval is configurable:
+
+```bash
+./gradlew bootRun --args='--orders.scheduler.promotion-rate-ms=5000'
+```
+
+Each run that moves something logs one line; runs with nothing to do stay quiet:
+
+```
+INFO 7812 --- [scheduling-1] c.v.o.service.OrderServiceImpl : Promoted 1 pending order(s) to PROCESSING
+```
+
+The job can be switched off entirely, which is also the easiest way to keep it from interfering while you work through the examples above:
+
+```bash
+./gradlew bootRun --args='--orders.scheduler.enabled=false'
+```
+
+### The job and cancel cannot corrupt each other
+
+Both target `PENDING` rows, and each is a single status-conditioned `UPDATE`, so exactly one of them wins:
+
+- **Cancel first.** The order is `CANCELLED`, and the job's `WHERE status = 'PENDING'` no longer matches it. It is never resurrected as `PROCESSING`.
+- **Job first.** The order is `PROCESSING`, and a cancel arriving afterwards gets `409 Conflict` naming that status.
+
+Verified against a running server with a five-second interval: an untouched order became `PROCESSING` on the next tick, an order cancelled beforehand was still `CANCELLED` after several ticks, and cancelling the promoted order returned `409`.
+
+---
+
+## 7. Run the whole collection at once
+
+Both scripts exercise every call above and assert the status codes. They do not test the promotion job, because doing so honestly would mean waiting out an interval; the test suite covers it instead by calling the service directly.
+
+For the same reason, start the app with `--orders.scheduler.enabled=false` before a run. Otherwise a tick landing between the script creating an order and cancelling it would turn that order `PROCESSING` and the cancel check would see `409`.
 
 ```bash
 bash docs/smoke-test.sh                      # optional: pass a base URL
@@ -485,15 +528,11 @@ Each script exits non-zero if any check fails, so it can be dropped into CI as a
 
 ---
 
-## 7. Coming in later sprints
+## 8. Coming in later sprints
 
-Shown for reference only — these do not work yet.
+Shown for reference only — this does not work yet.
 
 ```bash
-# Sprint 4 - the scheduler promotes PENDING to PROCESSING every minute,
-# so a new order moves on its own without any API call
-curl -s 'http://localhost:8080/api/v1/orders?status=PROCESSING'
-
 # Sprint 5 - interactive docs
 # http://localhost:8080/swagger-ui.html
 ```

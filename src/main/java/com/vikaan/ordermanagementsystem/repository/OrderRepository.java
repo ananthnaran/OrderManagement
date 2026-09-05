@@ -52,4 +52,23 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
     int cancelIfInStatus(@Param("id") UUID id,
                          @Param("expectedStatus") OrderStatus expectedStatus,
                          @Param("now") Instant now);
+
+    /**
+     * Promotes every {@code PENDING} order to {@code PROCESSING} in a single statement, and
+     * returns how many moved.
+     *
+     * <p>One statement rather than a loop over loaded entities: a per-row read-modify-write would
+     * reopen the window in which a concurrent cancel is overwritten. The {@code PENDING} predicate
+     * is also what makes cancellation safe in the other direction — a row that reached
+     * {@code CANCELLED} first simply no longer matches, so it can never be resurrected.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update Order o
+               set o.status = com.vikaan.ordermanagementsystem.entity.OrderStatus.PROCESSING,
+                   o.updatedAt = :now,
+                   o.version = o.version + 1
+             where o.status = com.vikaan.ordermanagementsystem.entity.OrderStatus.PENDING
+            """)
+    int promoteAllPending(@Param("now") Instant now);
 }

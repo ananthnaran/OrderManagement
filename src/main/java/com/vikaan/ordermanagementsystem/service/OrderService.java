@@ -28,4 +28,12 @@ public interface OrderService {
      *                                                                              {@code PENDING}
      */
     OrderResponse cancelOrder(UUID orderId);
+
+    /**
+     * Moves every {@code PENDING} order to {@code PROCESSING}. Called by the scheduler, and
+     * directly by tests so no test has to wait out a real interval.
+     *
+     * @return how many orders were promoted; {@code 0} is a normal, silent outcome
+     */
+    int promotePendingOrders();
 }

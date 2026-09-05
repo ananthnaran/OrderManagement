@@ -36,4 +36,7 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    // Activates src/test/resources/application-test.properties, which switches the promotion
+    // scheduler off so it cannot fire underneath a test that is asserting on PENDING orders.
+    systemProperty 'spring.profiles.active', 'test'
 }

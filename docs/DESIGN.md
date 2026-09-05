@@ -788,3 +788,14 @@ The concurrency design in §5.4 was implemented as written; the differences are 
 | 15 | **`getOrderById` and cancel share a private `findOrThrow`** | Both need "load with items or `404`". Extracted rather than duplicated. |
 
 Note that a cancel which loses the race is indistinguishable, from the caller's side, from cancelling an order that advanced minutes ago: both are a `409` naming the current status. That is intentional — the caller's next action is the same either way.
+
+### 17.8 Sprint 4 deviations
+
+| # | Deviation | Reason |
+|---|-----------|--------|
+| 16 | **The `test` profile disables the scheduler instead of speeding it up**, contradicting §10 and §13.5 | A fast global scheduler makes the suite racy rather than thorough. `@SpringBootTest` contexts are cached and outlive their class, so the scheduler keeps ticking underneath later tests and promotes the `PENDING` rows they assert on. One test re-enables it for itself and drops its context with `@DirtiesContext`. |
+| 17 | **`orders.scheduler.enabled` added**, not in §12.1 | Needed for deviation 16, and useful in its own right: the smoke scripts assert on `PENDING` orders, so a reviewer can run them without racing a tick. Guarded with `@ConditionalOnProperty`, defaulting to on. |
+| 18 | **The Gradle `test` task sets `spring.profiles.active=test`** | §10 assumed a `test` profile without saying who activates it. Doing it in the build means no test class has to remember `@ActiveProfiles`. |
+| 19 | **No `initialDelay`** | With `fixedRate` alone the first run happens at startup, which promotes anything left `PENDING` by a previous process. That is the desired recovery behaviour described in §8. |
+
+The scheduler's `WHERE status = 'PENDING'` is what makes §5.4 hold in both directions, and both orderings are now covered by tests at the repository and HTTP levels.

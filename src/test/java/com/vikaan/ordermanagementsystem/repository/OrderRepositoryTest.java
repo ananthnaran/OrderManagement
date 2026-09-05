@@ -250,6 +250,94 @@ class OrderRepositoryTest {
         assertThat(reloaded.getCancelledAt()).isNull();
     }
 
+    @Test
+    @DisplayName("the bulk promotion moves every pending order and reports the count")
+    void bulkPromotionMovesPendingOrders() {
+        persistOrder(OrderStatus.PENDING, NOW);
+        persistOrder(OrderStatus.PENDING, NOW.plusSeconds(1));
+
+        int promoted = orderRepository.promoteAllPending(NOW.plusSeconds(60));
+
+        assertThat(promoted).isEqualTo(2);
+        assertThat(orderRepository.findByStatus(OrderStatus.PROCESSING, PageRequest.of(0, 10)).getTotalElements())
+                .isEqualTo(2);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = OrderStatus.class, names = {"PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED"})
+    @DisplayName("the bulk promotion never touches an order that is not pending")
+    void bulkPromotionLeavesNonPendingOrdersAlone(OrderStatus status) {
+        Order order = persistOrder(status, NOW);
+
+        int promoted = orderRepository.promoteAllPending(NOW.plusSeconds(60));
+
+        assertThat(promoted).isZero();
+
+        Order reloaded = orderRepository.findWithItemsById(order.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(status);
+        assertThat(reloaded.getUpdatedAt()).isEqualTo(NOW);
+        assertThat(reloaded.getVersion()).isEqualTo(order.getVersion());
+    }
+
+    @Test
+    @DisplayName("the bulk promotion advances updatedAt and the version of the rows it moves")
+    void bulkPromotionAdvancesVersionAndTimestamp() {
+        Order pending = persistOrder(OrderStatus.PENDING, NOW);
+        Instant promotedAt = NOW.plusSeconds(60);
+
+        orderRepository.promoteAllPending(promotedAt);
+
+        Order reloaded = orderRepository.findWithItemsById(pending.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(OrderStatus.PROCESSING);
+        assertThat(reloaded.getUpdatedAt()).isEqualTo(promotedAt);
+        assertThat(reloaded.getCancelledAt()).isNull();
+        assertThat(reloaded.getVersion()).isEqualTo(pending.getVersion() + 1);
+    }
+
+    @Test
+    @DisplayName("the bulk promotion is a no-op when nothing is pending")
+    void bulkPromotionWithNothingPendingIsNoOp() {
+        persistOrder(OrderStatus.DELIVERED, NOW);
+
+        assertThat(orderRepository.promoteAllPending(NOW.plusSeconds(60))).isZero();
+    }
+
+    /**
+     * The two statements meeting on one row, in the order the scheduler is most likely to lose:
+     * cancel commits first, and the promotion's own WHERE clause is what protects the result.
+     */
+    @Test
+    @DisplayName("an order cancelled before a promotion stays cancelled")
+    void cancelBeforePromotionSurvives() {
+        Order order = persistOrder(OrderStatus.PENDING, NOW);
+
+        int cancelled = orderRepository.cancelIfInStatus(order.getId(), OrderStatus.PENDING, NOW.plusSeconds(30));
+        int promoted = orderRepository.promoteAllPending(NOW.plusSeconds(60));
+
+        assertThat(cancelled).isEqualTo(1);
+        assertThat(promoted).isZero();
+
+        Order reloaded = orderRepository.findWithItemsById(order.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(reloaded.getCancelledAt()).isEqualTo(NOW.plusSeconds(30));
+    }
+
+    @Test
+    @DisplayName("an order promoted before a cancel can no longer be cancelled")
+    void promotionBeforeCancelWins() {
+        Order order = persistOrder(OrderStatus.PENDING, NOW);
+
+        int promoted = orderRepository.promoteAllPending(NOW.plusSeconds(30));
+        int cancelled = orderRepository.cancelIfInStatus(order.getId(), OrderStatus.PENDING, NOW.plusSeconds(60));
+
+        assertThat(promoted).isEqualTo(1);
+        assertThat(cancelled).isZero();
+
+        Order reloaded = orderRepository.findWithItemsById(order.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(OrderStatus.PROCESSING);
+        assertThat(reloaded.getCancelledAt()).isNull();
+    }
+
     private Order persistOrder(OrderStatus status, Instant createdAt) {
         return persistOrder(status, createdAt, new BigDecimal("60.00"));
     }

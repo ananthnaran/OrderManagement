@@ -298,6 +298,45 @@ class OrderServiceImplTest {
         assertThat(captor.getValue()).isEqualTo(Instant.parse("2026-09-03T14:30:00.088344Z"));
     }
 
+    @Test
+    @DisplayName("promote delegates to the bulk update and returns how many orders moved")
+    void promoteReturnsTheCount() {
+        when(orderRepository.promoteAllPending(NOW)).thenReturn(3);
+
+        assertThat(orderService.promotePendingOrders()).isEqualTo(3);
+        verify(orderRepository).promoteAllPending(NOW);
+    }
+
+    @Test
+    @DisplayName("promote with nothing pending returns zero instead of failing")
+    void promoteWithNothingPendingReturnsZero() {
+        when(orderRepository.promoteAllPending(NOW)).thenReturn(0);
+
+        assertThat(orderService.promotePendingOrders()).isZero();
+    }
+
+    @Test
+    @DisplayName("promote is one statement, never a load-then-save over each order")
+    void promoteDoesNotLoopOverOrders() {
+        when(orderRepository.promoteAllPending(NOW)).thenReturn(2);
+
+        orderService.promotePendingOrders();
+
+        verify(orderRepository, never()).findAll(any(Pageable.class));
+        verify(orderRepository, never()).save(any(Order.class));
+    }
+
+    @Test
+    @DisplayName("promote truncates its timestamp to microseconds before it reaches SQL")
+    void promoteTruncatesTimestampToMicros() {
+        Instant withNanos = Instant.parse("2026-09-03T14:30:00.088344900Z");
+        OrderServiceImpl service = new OrderServiceImpl(orderRepository, Clock.fixed(withNanos, ZoneOffset.UTC));
+
+        service.promotePendingOrders();
+
+        verify(orderRepository).promoteAllPending(Instant.parse("2026-09-03T14:30:00.088344Z"));
+    }
+
     private Order cancelledOrder(UUID id) {
         Order order = orderInStatus(id, OrderStatus.CANCELLED);
         order.setCancelledAt(NOW);
