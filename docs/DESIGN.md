@@ -732,6 +732,8 @@ The service unit tests construct mocks with `Mockito.mock(...)` in `@BeforeEach`
 Two machine-specific obstacles, neither of which is a code problem and neither of which is committed to the repository:
 
 1. **Avast is intercepting HTTPS.** It presents its own root CA (`CN=Avast Web/Mail Shield Root`), which Windows trusts but the JVM's separate truststore does not. Every Gradle download therefore fails with `PKIX path building failed` while browsers and PowerShell work. Workaround used: `-Dorg.gradle.jvmargs=-Djavax.net.ssl.trustStoreType=Windows-ROOT`, which points the JVM at the Windows trust store. The durable fix is to disable Avast's HTTPS scanning or import its CA into the JDK.
+
+   That flag configures the *daemon*. It does not reach the wrapper's own bootstrap JVM, which is what downloads the distribution and re-validates `distributionUrl`. When the failure trace shows `org.gradle.wrapper.Download`, the trust store has to be exported to the wrapper as well — `$env:GRADLE_OPTS = "-Djavax.net.ssl.trustStoreType=Windows-ROOT"`. This surfaced in Sprint 5, on the first build that needed to fetch a new dependency.
 2. **`JAVA_HOME` is unset and `java` is not on `PATH`**, so `gradlew` exits with `9009` until `JAVA_HOME` is set to a JDK.
 
 The build command that works here:
@@ -799,3 +801,16 @@ Note that a cancel which loses the race is indistinguishable, from the caller's 
 | 19 | **No `initialDelay`** | With `fixedRate` alone the first run happens at startup, which promotes anything left `PENDING` by a previous process. That is the desired recovery behaviour described in §8. |
 
 The scheduler's `WHERE status = 'PENDING'` is what makes §5.4 hold in both directions, and both orderings are now covered by tests at the repository and HTTP levels.
+
+### 17.9 Sprint 5 deviations (Swagger UI)
+
+§11 held up: springdoc **3.1.0** is the right line for Boot 4.1.1, and it resolved with swagger-ui 5.32.11 and swagger-core 2.2.52.
+
+| # | Deviation | Reason |
+|---|-----------|--------|
+| 20 | **The controller now declares `produces`, and the create method `consumes`** | Not in §11. Without them springdoc documents every response as `*/*`, which understates the contract and makes generated clients guess at the media type. No test changed: they all already sent and expected JSON. |
+| 21 | **`springdoc.api-docs.version=openapi_3_1` set explicitly** | §11 listed only the two `enabled` properties. Left at its default the document is emitted as OpenAPI 3.0, which cannot express a nullable type properly. On 3.1, `cancelledAt` is typed `["string","null"]` instead of carrying the 3.0-era `nullable: true` extension. |
+| 22 | **The generated spec is asserted by tests** (`OpenApiDocumentationTest`, 7 tests) | §13 planned "UI renders, spec valid" as a manual check. The spec is built by runtime reflection, making it the one artefact that can silently degrade — a renamed DTO or an un-introspectable generic leaves the page loading and the contract wrong. The tests pin the operation set, the documented `409`/`404`, the resolved `PagedResponse<OrderResponse>` item ref, and the absence of server-owned fields in the request schema. |
+| 23 | **Two `@Schema` details are cosmetic only** | Swagger UI renders the `unitPrice` example as `25` rather than `25.00`, because it parses the example as a number and drops trailing zeros. The payload stays valid and the API accepts it; forcing the display would mean typing the example as a string and lying about the schema. |
+
+The smoke scripts grew from 29 to 33 checks, adding the spec version, the documented route set, the documented cancel `409`, and the UI redirect.

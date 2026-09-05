@@ -2,8 +2,8 @@
 
 Living progress tracker for the Ecommerce Order Processing System. Updated at the end of each sprint.
 
-**Last updated:** Saturday, 5 September 2026, after Sprint 4
-**Suite:** 131 tests, 0 failures, 0 skipped (`gradlew clean test`)
+**Last updated:** Saturday, 5 September 2026, mid Sprint 5 (Swagger UI landed)
+**Suite:** 138 tests, 0 failures, 0 skipped (`gradlew clean test`)
 
 Plan: [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) · Design: [`DESIGN.md`](./DESIGN.md) · Callable examples: [`API_EXAMPLES.md`](./API_EXAMPLES.md)
 
@@ -17,7 +17,7 @@ Plan: [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) · Design: [`DESIGN.md`](./DESIGN.md)
 | **2** | Listing, filtering, pagination | 5 | **Done** | +53 → 76 |
 | **3** | Cancellation and safe state transitions | 6 | **Done** | +31 → 107 |
 | **4** | Background promotion job | 4 | **Done** | +24 → 131 |
-| **5** | API docs, README, hardening | extras | Not started | — |
+| **5** | API docs, README, hardening | extras | **In progress** — Swagger UI done, README open | +7 → 138 |
 
 Progress: **4 of 5 sprints**, **all 6 requirements** functionally delivered.
 
@@ -34,7 +34,7 @@ Progress: **4 of 5 sprints**, **all 6 requirements** functionally delivered.
 | 5 | List all orders, optional status filter | **Live** | `GET /api/v1/orders`, `?status=`, paging and sorting |
 | 6 | Cancel only when `PENDING` | **Live** | `POST /api/v1/orders/{orderId}/cancel` → `200` / `409` / `404` / `400`, refused in SQL |
 
-Requested extras: pagination **done** (Sprint 2); Swagger UI and README still open (Sprint 5).
+Requested extras: pagination **done** (Sprint 2); Swagger UI **done** (Sprint 5); README still open.
 
 ---
 
@@ -51,7 +51,8 @@ Requested extras: pagination **done** (Sprint 2); Swagger UI and README still op
 
 Running alongside them, with no endpoint of its own: the promotion job moves every `PENDING` order to `PROCESSING` each minute. Set `orders.scheduler.promotion-rate-ms` to shorten the interval, or `orders.scheduler.enabled=false` to switch it off.
 
-Not yet routed: `/swagger-ui.html` (Sprint 5).
+Also routed, for humans rather than callers: `/swagger-ui.html` renders the interactive docs, and
+`/v3/api-docs` (or `/v3/api-docs.yaml`) serves the OpenAPI 3.1 spec behind it.
 
 ---
 
@@ -195,7 +196,37 @@ Against a running app with a five-second interval: an untouched order went `PEND
 
 ---
 
-## 8. Test inventory
+## 8. Sprint 5 — In progress
+
+Task S5.1, interactive API documentation, is done. The README (S5.2) and the final edge-case sweep are still open.
+
+| Task | State |
+|------|-------|
+| 5.1 `springdoc-openapi-starter-webmvc-ui` **3.1.0** wired in, spec and UI served | **Done** |
+| 5.2 `OpenApiConfig` metadata bean | **Done** |
+| 5.3 `@Tag` / `@Operation` / `@ApiResponses` on every endpoint, failures included | **Done** |
+| 5.4 `@Schema` examples on request and response DTOs | **Done** |
+| 5.5 Tests asserting the generated spec | **Done** — 7 tests |
+| 5.6 README | Open |
+| 5.7 Final edge-case sweep | Open |
+
+### 8.1 The spec is asserted, not eyeballed
+
+springdoc builds the document by reflecting over controllers at runtime, which makes it the one artefact that can break without a single other test noticing: rename a DTO, add a generic springdoc cannot introspect, and the page still loads while the contract silently degrades. `OpenApiDocumentationTest` therefore asserts the generated JSON — that all four operations appear and no fifth one does, that `409` and `404` are documented against `ErrorResponse` and not just the happy paths, that `PagedResponse<OrderResponse>` resolved to a real item `$ref` rather than a bare object, and that no server-owned field (`status`, `totalAmount`, `id`) leaks into the request schema.
+
+### 8.2 Media types are now declared
+
+The controller previously declared no `produces`, so every documented response came back as `*/*` — a weaker contract than the API actually offers, and one that makes generated clients guess. `@RequestMapping(produces = APPLICATION_JSON_VALUE)` on the class and `consumes` on the create method fixed it; the spec now names `application/json` throughout. No test changed, because all of them already sent and expected JSON.
+
+### 8.3 Verified live
+
+Against a running app: `/swagger-ui.html` redirects to the bundled UI and renders "Ecommerce Order Processing API v1 (OAS 3.1)" with no error banner, all four operations under the `Orders` tag, `200` / `400` / `404` / `409` listed on cancel, and the create body pre-filled from the `@Schema` examples. `/v3/api-docs` reports `"openapi": "3.1.0"`.
+
+One cosmetic note: Swagger UI renders the `unitPrice` example as `25` rather than `25.00`, because it parses the example as a number and drops the trailing zeros. The payload is still valid and the API accepts it.
+
+---
+
+## 9. Test inventory
 
 | Suite | Tests | Covers |
 |-------|-------|--------|
@@ -206,25 +237,26 @@ Against a running app with a five-second interval: an untouched order went `PEND
 | `OrderCancelIntegrationTest` | 9 | HTTP → H2 → HTTP for cancel, double cancel, advanced orders, filter movement |
 | `OrderListIntegrationTest` | 7 | HTTP → H2 → HTTP for filtering, slicing and ordering |
 | `OrderPromotionIntegrationTest` | 6 | Promotion end to end, batch promotion, and the cancel-versus-promote race |
+| `OpenApiDocumentationTest` | 7 | Generated spec: operations, documented failures, schemas, UI reachable |
 | `PendingOrderPromotionJobTest` | 3 | Delegation, error containment, quiet empty run |
 | `PendingOrderPromotionSchedulingTest` | 2 | `@Scheduled` really registered and really firing |
 | `OrderListQueryCountTest` | 1 | N+1 regression guard |
 | `OrderManagementSystemApplicationTests` | 1 | Context loads |
-| **Total** | **131** | 0 failures, 0 skipped |
+| **Total** | **138** | 0 failures, 0 skipped |
 
 ---
 
-## 9. Open items
+## 10. Open items
 
 | Item | Where it lands |
 |------|----------------|
-| Swagger UI (`springdoc` **3.1.0** — the `2.8.x` line is Boot 3 only) | Sprint 5 |
-| README | Sprint 5 |
+| README | Sprint 5, next |
+| Final edge-case sweep | Sprint 5 |
 | Four accepted test gaps from Sprint 1 | Deferred, `DESIGN.md` §17.5 |
 
 ---
 
-## 10. How to verify the current state
+## 11. How to verify the current state
 
 ```powershell
 # Build machine notes: JAVA_HOME must be set, and Avast's TLS interception
@@ -240,4 +272,13 @@ $env:JAVA_HOME = "C:\Users\ACER\.jdks\graalvm-ce-25.0.2"
 .\gradlew.bat bootRun "--args=--orders.scheduler.promotion-rate-ms=5000" "-Dorg.gradle.jvmargs=-Djavax.net.ssl.trustStoreType=Windows-ROOT"
 ```
 
-`bash docs/smoke-test.sh` is the equivalent on a Unix shell. Both run 29 checks and exit non-zero on the first mismatch. Data lives in an in-memory H2 database, so restarting the app clears every order.
+With the app running, the interactive docs are at <http://localhost:8080/swagger-ui.html>.
+
+If Gradle itself fails with a `PKIX path building failed` while *fetching the distribution*, the
+trust store also has to reach the wrapper's own JVM, which does not read `org.gradle.jvmargs`:
+
+```powershell
+$env:GRADLE_OPTS = "-Djavax.net.ssl.trustStoreType=Windows-ROOT"
+```
+
+`bash docs/smoke-test.sh` is the equivalent on a Unix shell. Both run 33 checks and exit non-zero on the first mismatch. Data lives in an in-memory H2 database, so restarting the app clears every order.

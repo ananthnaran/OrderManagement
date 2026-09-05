@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test for the Ecommerce Order Processing System (Sprints 1-3).
+# Smoke test for the Ecommerce Order Processing System (Sprints 1-5).
 # Usage: ./docs/smoke-test.sh [base-url]      (default http://localhost:8080)
 set -uo pipefail
 
@@ -173,6 +173,31 @@ check "cancel unknown id" "404" \
 
 # 27. Cancel a malformed uuid -> 400
 check "cancel malformed uuid" "400" "$(status_of -X POST "$ORDERS/not-a-uuid/cancel")"
+
+spec=$(curl -s "$BASE/v3/api-docs")
+
+# 28. The OpenAPI spec is served, and is the 3.1 document the docs claim
+spec_version=$(printf '%s' "$spec" | sed -n 's/.*"openapi":"\([^"]*\)".*/\1/p')
+check "openapi spec is served" "3.1.0" "$spec_version"
+
+# 29. Every route is documented, so the spec cannot quietly drift behind the API
+routes=0
+for route in '"/api/v1/orders"' '"/api/v1/orders/{orderId}"' '"/api/v1/orders/{orderId}/cancel"'; do
+  printf '%s' "$spec" | grep -q -- "$route" && routes=$((routes + 1))
+done
+check "spec documents every route" "3" "$routes"
+
+# 30. The cancel conflict is documented, not just implemented
+if printf '%s' "$spec" | grep -q '"409"'; then
+  printf '  PASS  %-46s %s\n' "spec documents the cancel 409" "present"
+  pass=$((pass + 1))
+else
+  printf '  FAIL  %-46s %s\n' "spec documents the cancel 409" "missing"
+  fail=$((fail + 1))
+fi
+
+# 31. Swagger UI redirects to the bundled page rather than 404ing
+check "swagger ui is routed" "302" "$(status_of "$BASE/swagger-ui.html")"
 
 echo
 echo "passed=$pass failed=$fail"

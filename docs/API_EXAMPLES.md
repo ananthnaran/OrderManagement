@@ -15,7 +15,8 @@ Runnable `curl` calls for the Ecommerce Order Processing System. Every command i
 | `GET` | `/api/v1/orders` | List orders, filter by status, paginate | **Available (Sprint 2)** |
 | `POST` | `/api/v1/orders/{orderId}/cancel` | Cancel a `PENDING` order | **Available (Sprint 3)** |
 
-Every route in the table works today. Swagger UI arrives in Sprint 5 and returns `404` until then.
+Every route in the table works today. They are also browsable and callable from Swagger UI at
+`/swagger-ui.html` — see [§8](#8-interactive-docs-swagger-ui).
 
 ---
 
@@ -518,8 +519,12 @@ Order API smoke test against http://localhost:8080
   PASS  cancelled order appears in the filter          True
   PASS  cancel unknown id                              404
   PASS  cancel malformed uuid                          400
+  PASS  openapi spec is served                         3.1.0
+  PASS  spec documents all 4 operations                4
+  PASS  spec documents the cancel 409                  True
+  PASS  swagger ui is routed                           302
 
-passed=29 failed=0
+passed=33 failed=0
 ```
 
 Both scripts accept a base URL, so they can be pointed at another port: `bash docs/smoke-test.sh http://localhost:8081` or `.\docs\smoke-test.ps1 -BaseUrl http://localhost:8081`.
@@ -528,13 +533,59 @@ Each script exits non-zero if any check fails, so it can be dropped into CI as a
 
 ---
 
-## 8. Coming in later sprints
+## 8. Interactive docs (Swagger UI)
 
-Shown for reference only — this does not work yet.
+With the application running, the same API is browsable and callable from a page:
+
+| What | URL |
+|------|-----|
+| Swagger UI | <http://localhost:8080/swagger-ui.html> |
+| OpenAPI spec, JSON | <http://localhost:8080/v3/api-docs> |
+| OpenAPI spec, YAML | <http://localhost:8080/v3/api-docs.yaml> |
+
+Every operation documents its failures, not just its happy path — so `409` on cancelling a
+non-`PENDING` order and `400` on a non-whitelisted sort property are visible without reading the
+source. Request bodies come pre-filled from the schema examples, so "Try it out" works on the
+create endpoint with no typing.
+
+The spec is OpenAPI **3.1**, which matters for one field: `cancelledAt` is typed as
+`["string", "null"]` rather than carrying the older `nullable: true` extension.
 
 ```bash
-# Sprint 5 - interactive docs
-# http://localhost:8080/swagger-ui.html
+# Confirm the spec is served, and which version it claims
+curl -s http://localhost:8080/v3/api-docs | grep -o '"openapi":"[^"]*"'
+
+# Save the spec to import into Postman or to generate a client
+curl -s http://localhost:8080/v3/api-docs.yaml -o openapi.yaml
+```
+
+```powershell
+# List every documented operation
+$spec = Invoke-RestMethod http://localhost:8080/v3/api-docs
+$spec.paths.PSObject.Properties | ForEach-Object {
+    $path = $_.Name
+    $_.Value.PSObject.Properties | ForEach-Object {
+        "{0,-6} {1} - {2}" -f $_.Name.ToUpper(), $path, $_.Value.summary
+    }
+}
+```
+
+Expected output:
+
+```
+GET    /api/v1/orders - List orders, optionally filtered by status
+POST   /api/v1/orders - Create an order
+POST   /api/v1/orders/{orderId}/cancel - Cancel an order, allowed only while it is PENDING
+GET    /api/v1/orders/{orderId} - Retrieve an order by id
+```
+
+Swagger UI sorts the operations by method for display, so the page and this listing do not
+necessarily agree on order.
+
+Both routes can be switched off for a deployment that should not expose them:
+
+```bash
+./gradlew bootRun --args="--springdoc.swagger-ui.enabled=false --springdoc.api-docs.enabled=false"
 ```
 
 Note that H2 runs in memory, so restarting the application clears every order created by these calls.

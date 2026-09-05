@@ -1,4 +1,4 @@
-# Smoke test for the Ecommerce Order Processing System (Sprints 1-3).
+# Smoke test for the Ecommerce Order Processing System (Sprints 1-5).
 # Usage: .\docs\smoke-test.ps1 [-BaseUrl http://localhost:8080]
 #
 # JSON is piped to curl via stdin ("-d @-") on purpose. In PowerShell,
@@ -156,6 +156,21 @@ Check "cancel unknown id" "404" (PostStatus "$orders/11111111-2222-3333-4444-555
 
 # 27. Cancel a malformed uuid -> 400
 Check "cancel malformed uuid" "400" (PostStatus "$orders/not-a-uuid/cancel")
+
+# 28. The OpenAPI spec is served, and is the 3.1 document the docs claim
+$spec = (curl.exe -s "$BaseUrl/v3/api-docs") | ConvertFrom-Json
+Check "openapi spec is served" "3.1.0" $spec.openapi
+
+# 29. Every endpoint is documented, so the spec cannot drift behind the API
+Check "spec documents all 4 operations" "4" `
+    ([string](($spec.paths.PSObject.Properties | ForEach-Object { $_.Value.PSObject.Properties }).Count))
+
+# 30. The cancel conflict is documented, not just implemented
+Check "spec documents the cancel 409" "True" `
+    ([string]($null -ne $spec.paths.'/api/v1/orders/{orderId}/cancel'.post.responses.'409'))
+
+# 31. Swagger UI redirects to the bundled page rather than 404ing
+Check "swagger ui is routed" "302" (GetStatus "$BaseUrl/swagger-ui.html")
 
 Write-Host ""
 Write-Host "passed=$script:pass failed=$script:fail"
