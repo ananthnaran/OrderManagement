@@ -775,3 +775,16 @@ Closing these is roughly four short `@WebMvcTest` cases and is a reasonable firs
 | 11 | **Sort accepts a single property**, not a repeated `sort` parameter | Multi-property sorting was not required. Documented rather than silently ignoring extra values. |
 
 The `PageImpl` warning in §3.3 was worth heeding: `PagedResponse` is returned instead, so the JSON contract does not depend on Spring's internal page serialization.
+
+### 17.7 Sprint 3 deviations
+
+The concurrency design in §5.4 was implemented as written; the differences are small and local.
+
+| # | Deviation | Reason |
+|---|-----------|--------|
+| 12 | **`InvalidOrderStateException` has a private constructor and a `cannotCancel(status)` factory** | The message in §3.5 is cancel-specific. A factory keeps that wording in one place while leaving the type free to name other rejected transitions later. |
+| 13 | **`CANCELLED` is a fully-qualified enum literal inside the JPQL**, not a bind parameter | The target status of a cancel is never in question, so making it a parameter would let a caller write any status through this method. `expectedStatus` stays a parameter because Sprint 4 may condition on a different one. |
+| 14 | **Cancel costs one `UPDATE` plus one `SELECT` on success** | §5.4 requires a re-read after the bulk update, since `clearAutomatically` empties the persistence context. Mapping the pre-update entity instead would echo a stale `PENDING` to the client. |
+| 15 | **`getOrderById` and cancel share a private `findOrThrow`** | Both need "load with items or `404`". Extracted rather than duplicated. |
+
+Note that a cancel which loses the race is indistinguishable, from the caller's side, from cancelling an order that advanced minutes ago: both are a `409` naming the current status. That is intentional — the caller's next action is the same either way.

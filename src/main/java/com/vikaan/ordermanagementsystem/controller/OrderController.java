@@ -50,4 +50,13 @@ public class OrderController {
                 OrderQueryParams.parseStatus(status),
                 OrderQueryParams.parsePageable(page, size, sort));
     }
+
+    /**
+     * A command rather than a {@code PATCH} on {@code status}: a general status patch would invite
+     * arbitrary client-driven transitions, which requirement 6 forbids.
+     */
+    @PostMapping("/{orderId}/cancel")
+    public OrderResponse cancelOrder(@PathVariable UUID orderId) {
+        return orderService.cancelOrder(orderId);
+    }
 }

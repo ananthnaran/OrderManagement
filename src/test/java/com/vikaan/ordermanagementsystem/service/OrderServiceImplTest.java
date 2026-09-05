@@ -6,12 +6,15 @@ import com.vikaan.ordermanagementsystem.dto.response.OrderResponse;
 import com.vikaan.ordermanagementsystem.dto.response.PagedResponse;
 import com.vikaan.ordermanagementsystem.entity.Order;
 import com.vikaan.ordermanagementsystem.entity.OrderStatus;
+import com.vikaan.ordermanagementsystem.exception.InvalidOrderStateException;
 import com.vikaan.ordermanagementsystem.exception.InvalidRequestException;
 import com.vikaan.ordermanagementsystem.exception.OrderNotFoundException;
 import com.vikaan.ordermanagementsystem.repository.OrderRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -29,6 +32,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -222,6 +226,89 @@ class OrderServiceImplTest {
 
         assertThat(response.content()).isEmpty();
         assertThat(response.totalElements()).isZero();
+    }
+
+    @Test
+    @DisplayName("cancel returns the cancelled order when the conditional update matches a row")
+    void cancelReturnsCancelledOrder() {
+        UUID id = UUID.randomUUID();
+        when(orderRepository.cancelIfInStatus(id, OrderStatus.PENDING, NOW)).thenReturn(1);
+        when(orderRepository.findWithItemsById(id)).thenReturn(Optional.of(cancelledOrder(id)));
+
+        OrderResponse response = orderService.cancelOrder(id);
+
+        assertThat(response.status()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(response.cancelledAt()).isEqualTo(NOW);
+        verify(orderRepository).cancelIfInStatus(id, OrderStatus.PENDING, NOW);
+    }
+
+    @Test
+    @DisplayName("cancel decides on the affected row count and never loads then saves the order")
+    void cancelNeverReadsThenWrites() {
+        UUID id = UUID.randomUUID();
+        when(orderRepository.cancelIfInStatus(id, OrderStatus.PENDING, NOW)).thenReturn(1);
+        when(orderRepository.findWithItemsById(id)).thenReturn(Optional.of(cancelledOrder(id)));
+
+        orderService.cancelOrder(id);
+
+        verify(orderRepository, never()).save(any(Order.class));
+    }
+
+    @Test
+    @DisplayName("cancel throws OrderNotFoundException when nothing matched and no such order exists")
+    void cancelThrowsNotFoundForUnknownOrder() {
+        UUID id = UUID.randomUUID();
+        when(orderRepository.cancelIfInStatus(id, OrderStatus.PENDING, NOW)).thenReturn(0);
+        when(orderRepository.findWithItemsById(id)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> orderService.cancelOrder(id))
+                .isInstanceOf(OrderNotFoundException.class)
+                .hasMessageContaining(id.toString());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = OrderStatus.class, names = {"PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED"})
+    @DisplayName("cancel reports the status the order is actually in when nothing matched")
+    void cancelThrowsConflictForNonPendingOrder(OrderStatus status) {
+        UUID id = UUID.randomUUID();
+        when(orderRepository.cancelIfInStatus(id, OrderStatus.PENDING, NOW)).thenReturn(0);
+        when(orderRepository.findWithItemsById(id)).thenReturn(Optional.of(orderInStatus(id, status)));
+
+        assertThatThrownBy(() -> orderService.cancelOrder(id))
+                .isInstanceOf(InvalidOrderStateException.class)
+                .hasMessageContaining("only while PENDING")
+                .hasMessageContaining(status.name());
+
+        verify(orderRepository, never()).save(any(Order.class));
+    }
+
+    @Test
+    @DisplayName("cancel truncates its timestamp to microseconds before it reaches SQL")
+    void cancelTruncatesTimestampToMicros() {
+        Instant withNanos = Instant.parse("2026-09-03T14:30:00.088344900Z");
+        OrderServiceImpl service = new OrderServiceImpl(orderRepository, Clock.fixed(withNanos, ZoneOffset.UTC));
+        UUID id = UUID.randomUUID();
+        when(orderRepository.cancelIfInStatus(any(), any(), any())).thenReturn(1);
+        when(orderRepository.findWithItemsById(id)).thenReturn(Optional.of(cancelledOrder(id)));
+
+        service.cancelOrder(id);
+
+        ArgumentCaptor<Instant> captor = ArgumentCaptor.forClass(Instant.class);
+        verify(orderRepository).cancelIfInStatus(eq(id), eq(OrderStatus.PENDING), captor.capture());
+        assertThat(captor.getValue()).isEqualTo(Instant.parse("2026-09-03T14:30:00.088344Z"));
+    }
+
+    private Order cancelledOrder(UUID id) {
+        Order order = orderInStatus(id, OrderStatus.CANCELLED);
+        order.setCancelledAt(NOW);
+        return order;
+    }
+
+    private Order orderInStatus(UUID id, OrderStatus status) {
+        Order order = storedOrder();
+        order.setId(id);
+        order.setStatus(status);
+        return order;
     }
 
     private Order storedOrder() {

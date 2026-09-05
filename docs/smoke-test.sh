@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sprint 1 smoke test for the Ecommerce Order Processing System.
+# Smoke test for the Ecommerce Order Processing System (Sprints 1-3).
 # Usage: ./docs/smoke-test.sh [base-url]      (default http://localhost:8080)
 set -uo pipefail
 
@@ -125,6 +125,54 @@ check "list with negative page" "400" "$(status_of "$ORDERS?page=-1")"
 
 # 20. Zero page size -> 400
 check "list with zero size" "400" "$(status_of "$ORDERS?size=0")"
+
+# --- cancel (Sprint 3) ---
+
+# 21. Cancel a PENDING order -> CANCELLED
+cancel_created=$(curl -s -X POST "$ORDERS" -H 'Content-Type: application/json' \
+  -d '{"customerId":"CUST-CANCEL","items":[
+        {"productId":"SKU-MOUSE","productName":"Wireless Mouse","quantity":1,"unitPrice":25.00}]}')
+cancel_id=$(printf '%s' "$cancel_created" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+
+cancelled=$(curl -s -X POST "$ORDERS/$cancel_id/cancel")
+cancelled_status=$(printf '%s' "$cancelled" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p')
+check "cancel a pending order" "CANCELLED" "$cancelled_status"
+
+# 22. cancelledAt is populated on the way out
+cancelled_at=$(printf '%s' "$cancelled" | sed -n 's/.*"cancelledAt":"\([^"]*\)".*/\1/p')
+if [ -n "$cancelled_at" ]; then
+  printf '  PASS  %-46s %s\n' "cancel sets cancelledAt" "$cancelled_at"
+  pass=$((pass + 1))
+else
+  printf '  FAIL  %-46s %s\n' "cancel sets cancelledAt" "null"
+  fail=$((fail + 1))
+fi
+
+# 23. Cancelling twice -> 409, not a silent success
+check "cancel an already cancelled order" "409" \
+  "$(status_of -X POST "$ORDERS/$cancel_id/cancel")"
+
+# 24. The conflict names the status the order is actually in
+conflict=$(curl -s -X POST "$ORDERS/$cancel_id/cancel")
+conflict_msg=$(printf '%s' "$conflict" | sed -n 's/.*"message":"\([^"]*\)".*/\1/p')
+check "conflict names the current status" \
+  "Order can be cancelled only while PENDING. Current status: CANCELLED" "$conflict_msg"
+
+# 25. The cancelled order is reachable through the status filter
+if curl -s "$ORDERS?status=CANCELLED" | grep -q "$cancel_id"; then
+  printf '  PASS  %-46s %s\n' "cancelled order appears in the filter" "$cancel_id"
+  pass=$((pass + 1))
+else
+  printf '  FAIL  %-46s %s\n' "cancelled order appears in the filter" "missing"
+  fail=$((fail + 1))
+fi
+
+# 26. Cancel an unknown id -> 404, never a conflict
+check "cancel unknown id" "404" \
+  "$(status_of -X POST "$ORDERS/11111111-2222-3333-4444-555555555555/cancel")"
+
+# 27. Cancel a malformed uuid -> 400
+check "cancel malformed uuid" "400" "$(status_of -X POST "$ORDERS/not-a-uuid/cancel")"
 
 echo
 echo "passed=$pass failed=$fail"

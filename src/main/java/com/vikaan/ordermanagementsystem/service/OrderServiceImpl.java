@@ -7,6 +7,7 @@ import com.vikaan.ordermanagementsystem.dto.response.PagedResponse;
 import com.vikaan.ordermanagementsystem.entity.Order;
 import com.vikaan.ordermanagementsystem.entity.OrderItem;
 import com.vikaan.ordermanagementsystem.entity.OrderStatus;
+import com.vikaan.ordermanagementsystem.exception.InvalidOrderStateException;
 import com.vikaan.ordermanagementsystem.exception.InvalidRequestException;
 import com.vikaan.ordermanagementsystem.exception.OrderNotFoundException;
 import com.vikaan.ordermanagementsystem.mapper.OrderMapper;
@@ -83,9 +84,7 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional(readOnly = true)
     public OrderResponse getOrderById(UUID orderId) {
-        return orderRepository.findWithItemsById(orderId)
-                .map(OrderMapper::toResponse)
-                .orElseThrow(() -> new OrderNotFoundException(orderId));
+        return OrderMapper.toResponse(findOrThrow(orderId));
     }
 
     @Override
@@ -97,6 +96,33 @@ public class OrderServiceImpl implements OrderService {
 
         // Mapping happens inside the transaction so the batched `items` load can still run.
         return PagedResponse.from(orders.map(OrderMapper::toResponse));
+    }
+
+    @Override
+    @Transactional
+    public OrderResponse cancelOrder(UUID orderId) {
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+
+        int rowsCancelled = orderRepository.cancelIfInStatus(orderId, OrderStatus.PENDING, now);
+        if (rowsCancelled == 0) {
+            // Zero rows means either no such order, or one that has already left PENDING.
+            // Only a re-read separates the two, and conflating them would report a live order
+            // as missing.
+            Order current = findOrThrow(orderId);
+            log.warn("Rejected cancel of order {}: status is {}", orderId, current.getStatus());
+            throw InvalidOrderStateException.cannotCancel(current.getStatus());
+        }
+
+        // The update cleared the persistence context, so this reads the committed state rather
+        // than a stale copy that still says PENDING.
+        Order cancelled = findOrThrow(orderId);
+        log.info("Cancelled order {} at {}", orderId, cancelled.getCancelledAt());
+        return OrderMapper.toResponse(cancelled);
+    }
+
+    private Order findOrThrow(UUID orderId) {
+        return orderRepository.findWithItemsById(orderId)
+                .orElseThrow(() -> new OrderNotFoundException(orderId));
     }
 
     private void rejectDuplicateProducts(List<OrderItemRequest> items) {

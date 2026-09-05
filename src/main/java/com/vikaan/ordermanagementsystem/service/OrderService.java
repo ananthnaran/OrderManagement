@@ -18,4 +18,14 @@ public interface OrderService {
      * @param status optional filter; {@code null} lists every order
      */
     PagedResponse<OrderResponse> listOrders(OrderStatus status, Pageable pageable);
+
+    /**
+     * Cancels an order that is still {@code PENDING}.
+     *
+     * @throws com.vikaan.ordermanagementsystem.exception.OrderNotFoundException     no such order
+     * @throws com.vikaan.ordermanagementsystem.exception.InvalidOrderStateException the order has
+     *                                                                              already left
+     *                                                                              {@code PENDING}
+     */
+    OrderResponse cancelOrder(UUID orderId);
 }

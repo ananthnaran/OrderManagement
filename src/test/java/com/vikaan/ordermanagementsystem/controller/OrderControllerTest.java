@@ -5,6 +5,7 @@ import com.vikaan.ordermanagementsystem.dto.response.OrderItemResponse;
 import com.vikaan.ordermanagementsystem.dto.response.OrderResponse;
 import com.vikaan.ordermanagementsystem.dto.response.PagedResponse;
 import com.vikaan.ordermanagementsystem.entity.OrderStatus;
+import com.vikaan.ordermanagementsystem.exception.InvalidOrderStateException;
 import com.vikaan.ordermanagementsystem.exception.InvalidRequestException;
 import com.vikaan.ordermanagementsystem.exception.OrderNotFoundException;
 import com.vikaan.ordermanagementsystem.service.OrderService;
@@ -312,6 +313,72 @@ class OrderControllerTest {
         mockMvc.perform(get("/api/v1/orders").param("page", "abc"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status").value(400));
+    }
+
+    @Test
+    @DisplayName("POST cancel returns 200 with the cancelled order")
+    void cancelReturnsOk() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(orderService.cancelOrder(id)).thenReturn(cancelledResponse(id));
+
+        mockMvc.perform(post("/api/v1/orders/{id}/cancel", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(id.toString()))
+                .andExpect(jsonPath("$.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.cancelledAt").isNotEmpty());
+
+        verify(orderService).cancelOrder(id);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED"})
+    @DisplayName("POST cancel returns 409 naming the status the order is in")
+    void cancelReturnsConflictOnceOrderHasLeftPending(String status) throws Exception {
+        UUID id = UUID.randomUUID();
+        when(orderService.cancelOrder(id))
+                .thenThrow(InvalidOrderStateException.cannotCancel(OrderStatus.valueOf(status)));
+
+        mockMvc.perform(post("/api/v1/orders/{id}/cancel", id))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("Conflict"))
+                .andExpect(jsonPath("$.message").value(containsString("only while PENDING")))
+                .andExpect(jsonPath("$.message").value(containsString(status)))
+                .andExpect(jsonPath("$.path").value("/api/v1/orders/" + id + "/cancel"));
+    }
+
+    @Test
+    @DisplayName("POST cancel on an unknown id returns 404, not a conflict")
+    void cancelReturnsNotFoundForUnknownId() throws Exception {
+        UUID id = UUID.randomUUID();
+        when(orderService.cancelOrder(id)).thenThrow(new OrderNotFoundException(id));
+
+        mockMvc.perform(post("/api/v1/orders/{id}/cancel", id))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404));
+    }
+
+    @Test
+    @DisplayName("POST cancel with a malformed uuid returns 400 and never reaches the service")
+    void cancelRejectsMalformedUuid() throws Exception {
+        mockMvc.perform(post("/api/v1/orders/not-a-uuid/cancel"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400));
+
+        verify(orderService, never()).cancelOrder(any());
+    }
+
+    private OrderResponse cancelledResponse(UUID id) {
+        OrderResponse pending = sampleResponse(id);
+        return new OrderResponse(
+                pending.id(),
+                pending.customerId(),
+                OrderStatus.CANCELLED,
+                pending.totalAmount(),
+                pending.items(),
+                pending.createdAt(),
+                pending.createdAt(),
+                pending.createdAt());
     }
 
     private PagedResponse<OrderResponse> emptyPage() {

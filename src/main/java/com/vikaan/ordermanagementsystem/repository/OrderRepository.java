@@ -6,7 +6,11 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -21,4 +25,31 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
      * via {@code @BatchSize} on the association instead.
      */
     Page<Order> findByStatus(OrderStatus status, Pageable pageable);
+
+    /**
+     * Cancels {@code id} only while it still holds {@code expectedStatus}, returning the number of
+     * rows that matched. The row count, rather than a preceding read, is what decides the outcome:
+     * a read-then-write would let the promotion job and a concurrent cancel overwrite each other.
+     *
+     * <p>Bulk JPQL bypasses the persistence context, {@code @Version} checking and entity
+     * callbacks, so {@code version} and {@code updatedAt} are advanced inside the statement, and
+     * the context is flushed beforehand and cleared afterwards to keep stale copies out of the
+     * remainder of the transaction.
+     *
+     * @return {@code 1} when the order was cancelled, {@code 0} when it does not exist or has
+     *         already left {@code expectedStatus}
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            update Order o
+               set o.status = com.vikaan.ordermanagementsystem.entity.OrderStatus.CANCELLED,
+                   o.cancelledAt = :now,
+                   o.updatedAt = :now,
+                   o.version = o.version + 1
+             where o.id = :id
+               and o.status = :expectedStatus
+            """)
+    int cancelIfInStatus(@Param("id") UUID id,
+                         @Param("expectedStatus") OrderStatus expectedStatus,
+                         @Param("now") Instant now);
 }

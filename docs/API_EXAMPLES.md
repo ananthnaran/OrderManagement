@@ -13,9 +13,9 @@ Runnable `curl` calls for the Ecommerce Order Processing System. Every command i
 | `POST` | `/api/v1/orders` | Create an order with multiple items | **Available (Sprint 1)** |
 | `GET` | `/api/v1/orders/{orderId}` | Retrieve an order by ID | **Available (Sprint 1)** |
 | `GET` | `/api/v1/orders` | List orders, filter by status, paginate | **Available (Sprint 2)** |
-| `POST` | `/api/v1/orders/{orderId}/cancel` | Cancel a `PENDING` order | Planned — Sprint 3 |
+| `POST` | `/api/v1/orders/{orderId}/cancel` | Cancel a `PENDING` order | **Available (Sprint 3)** |
 
-The planned routes are not implemented yet. Calling them today returns `404` (no handler), not a business error.
+Every route in the table works today. Swagger UI arrives in Sprint 5 and returns `404` until then.
 
 ---
 
@@ -352,7 +352,84 @@ curl -s 'http://localhost:8080/api/v1/orders?size=5000'
 
 ---
 
-## 5. Run the whole collection at once
+## 5. Cancel an order
+
+A `POST` command rather than a `PATCH` on `status`, so a client cannot ask for an arbitrary transition. No request body, so both shells take the same form.
+
+```bash
+ORDER_ID=<a pending order id>
+curl -s -X POST "http://localhost:8080/api/v1/orders/$ORDER_ID/cancel"
+```
+
+```powershell
+curl.exe -s -X POST "http://localhost:8080/api/v1/orders/$orderId/cancel"
+```
+
+**`200 OK`** with the full order, now cancelled. `cancelledAt` and `updatedAt` are the same instant, and the items and total are untouched:
+
+```json
+{
+  "id": "3b84066a-93fd-4fe4-82f5-719e5f5202d6",
+  "customerId": "CUST-1001",
+  "status": "CANCELLED",
+  "totalAmount": 60.00,
+  "items": [
+    {"productId":"SKU-MOUSE","productName":"Wireless Mouse","quantity":2,"unitPrice":25.00,"lineTotal":50.00},
+    {"productId":"SKU-PAD","productName":"Mouse Pad","quantity":1,"unitPrice":10.00,"lineTotal":10.00}
+  ],
+  "createdAt": "2026-09-04T16:23:59.451602Z",
+  "updatedAt": "2026-09-04T16:23:59.862520Z",
+  "cancelledAt": "2026-09-04T16:23:59.862520Z"
+}
+```
+
+The cancelled order immediately leaves the `PENDING` filter and appears under `CANCELLED`:
+
+```bash
+curl -s 'http://localhost:8080/api/v1/orders?status=CANCELLED'
+```
+
+### Cancelling twice — `409`, not a silent success
+
+Running the same call again reports the status the order is actually in:
+
+```json
+{
+  "timestamp": "2026-09-04T16:24:00.020445300Z",
+  "status": 409,
+  "error": "Conflict",
+  "message": "Order can be cancelled only while PENDING. Current status: CANCELLED",
+  "path": "/api/v1/orders/3b84066a-93fd-4fe4-82f5-719e5f5202d6/cancel",
+  "details": []
+}
+```
+
+`PROCESSING`, `SHIPPED` and `DELIVERED` behave the same way, each naming its own status. The refusal comes from the SQL predicate — `WHERE id = ? AND status = 'PENDING'` — so a background promotion running at the same instant cannot slip between a status check and the write.
+
+### Unknown and malformed IDs
+
+A missing order and one that has merely advanced are never conflated:
+
+```bash
+# Unknown id -> 404
+curl -s -X POST http://localhost:8080/api/v1/orders/11111111-2222-3333-4444-555555555555/cancel
+
+# Malformed id -> 400
+curl -s -X POST http://localhost:8080/api/v1/orders/not-a-uuid/cancel
+```
+
+```json
+{
+  "status": 404,
+  "error": "Not Found",
+  "message": "Order not found: 11111111-2222-3333-4444-555555555555",
+  "details": []
+}
+```
+
+---
+
+## 6. Run the whole collection at once
 
 Both scripts exercise every call above and assert the status codes.
 
@@ -391,8 +468,15 @@ Order API smoke test against http://localhost:8080
   PASS  list with unsortable property                  400
   PASS  list with negative page                        400
   PASS  list with zero size                            400
+  PASS  cancel a pending order                         CANCELLED
+  PASS  cancel sets cancelledAt                        True
+  PASS  cancel an already cancelled order              409
+  PASS  conflict names the current status              Order can be cancelled only while PENDING. Current status: CANCELLED
+  PASS  cancelled order appears in the filter          True
+  PASS  cancel unknown id                              404
+  PASS  cancel malformed uuid                          400
 
-passed=22 failed=0
+passed=29 failed=0
 ```
 
 Both scripts accept a base URL, so they can be pointed at another port: `bash docs/smoke-test.sh http://localhost:8081` or `.\docs\smoke-test.ps1 -BaseUrl http://localhost:8081`.
@@ -401,13 +485,14 @@ Each script exits non-zero if any check fails, so it can be dropped into CI as a
 
 ---
 
-## 6. Coming in later sprints
+## 7. Coming in later sprints
 
 Shown for reference only — these do not work yet.
 
 ```bash
-# Sprint 3 - cancel, allowed only while PENDING (409 otherwise)
-curl -s -X POST "http://localhost:8080/api/v1/orders/$ORDER_ID/cancel"
+# Sprint 4 - the scheduler promotes PENDING to PROCESSING every minute,
+# so a new order moves on its own without any API call
+curl -s 'http://localhost:8080/api/v1/orders?status=PROCESSING'
 
 # Sprint 5 - interactive docs
 # http://localhost:8080/swagger-ui.html

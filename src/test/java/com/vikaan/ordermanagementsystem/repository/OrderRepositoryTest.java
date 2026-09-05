@@ -6,6 +6,8 @@ import com.vikaan.ordermanagementsystem.entity.OrderStatus;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.data.domain.Page;
@@ -187,6 +189,65 @@ class OrderRepositoryTest {
                 "idx_orders_created_at",
                 "idx_orders_status_created_at",
                 "idx_order_items_order_id");
+    }
+
+    @Test
+    @DisplayName("the conditional cancel updates a PENDING row and reports one affected row")
+    void conditionalCancelUpdatesPendingRow() {
+        Order pending = persistOrder(OrderStatus.PENDING, NOW);
+        Instant cancelledAt = NOW.plusSeconds(120);
+
+        int rows = orderRepository.cancelIfInStatus(pending.getId(), OrderStatus.PENDING, cancelledAt);
+
+        assertThat(rows).isEqualTo(1);
+
+        Order reloaded = orderRepository.findWithItemsById(pending.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(OrderStatus.CANCELLED);
+        assertThat(reloaded.getCancelledAt()).isEqualTo(cancelledAt);
+        assertThat(reloaded.getUpdatedAt()).isEqualTo(cancelledAt);
+        assertThat(reloaded.getVersion()).isEqualTo(pending.getVersion() + 1);
+    }
+
+    /**
+     * The heart of the cancel rule: it is the SQL predicate that refuses, not an in-memory check,
+     * so a concurrent promotion cannot slip between a read and a write.
+     */
+    @ParameterizedTest
+    @EnumSource(value = OrderStatus.class, names = {"PROCESSING", "SHIPPED", "DELIVERED", "CANCELLED"})
+    @DisplayName("the conditional cancel reports zero rows and changes nothing once the order has left PENDING")
+    void conditionalCancelSkipsNonPendingRows(OrderStatus status) {
+        Order order = persistOrder(status, NOW);
+
+        int rows = orderRepository.cancelIfInStatus(order.getId(), OrderStatus.PENDING, NOW.plusSeconds(120));
+
+        assertThat(rows).isZero();
+
+        Order reloaded = orderRepository.findWithItemsById(order.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(status);
+        assertThat(reloaded.getCancelledAt()).isNull();
+        assertThat(reloaded.getUpdatedAt()).isEqualTo(NOW);
+        assertThat(reloaded.getVersion()).isEqualTo(order.getVersion());
+    }
+
+    @Test
+    @DisplayName("the conditional cancel reports zero rows for an unknown id")
+    void conditionalCancelReportsZeroForUnknownId() {
+        int rows = orderRepository.cancelIfInStatus(UUID.randomUUID(), OrderStatus.PENDING, NOW);
+
+        assertThat(rows).isZero();
+    }
+
+    @Test
+    @DisplayName("the conditional cancel leaves other pending orders alone")
+    void conditionalCancelTouchesOnlyTheTargetRow() {
+        Order target = persistOrder(OrderStatus.PENDING, NOW);
+        Order bystander = persistOrder(OrderStatus.PENDING, NOW.plusSeconds(1));
+
+        orderRepository.cancelIfInStatus(target.getId(), OrderStatus.PENDING, NOW.plusSeconds(120));
+
+        Order reloaded = orderRepository.findWithItemsById(bystander.getId()).orElseThrow();
+        assertThat(reloaded.getStatus()).isEqualTo(OrderStatus.PENDING);
+        assertThat(reloaded.getCancelledAt()).isNull();
     }
 
     private Order persistOrder(OrderStatus status, Instant createdAt) {

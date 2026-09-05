@@ -1,4 +1,4 @@
-# Sprint 1 smoke test for the Ecommerce Order Processing System.
+# Smoke test for the Ecommerce Order Processing System (Sprints 1-3).
 # Usage: .\docs\smoke-test.ps1 [-BaseUrl http://localhost:8080]
 #
 # JSON is piped to curl via stdin ("-d @-") on purpose. In PowerShell,
@@ -35,6 +35,11 @@ function PostJson {
 function GetStatus {
     param([string]$Url)
     return (curl.exe -s -o NUL -w "%{http_code}" $Url)
+}
+
+function PostStatus {
+    param([string]$Url)
+    return (curl.exe -s -o NUL -w "%{http_code}" -X POST $Url)
 }
 
 Write-Host "Order API smoke test against $BaseUrl"
@@ -119,6 +124,38 @@ Check "list with negative page" "400" (GetStatus "$orders`?page=-1")
 
 # 20. Zero page size -> 400
 Check "list with zero size" "400" (GetStatus "$orders`?size=0")
+
+# --- cancel (Sprint 3) ---
+
+# 21. Cancel a PENDING order -> CANCELLED
+$cancelJson = @'
+{"customerId":"CUST-CANCEL","items":[
+  {"productId":"SKU-MOUSE","productName":"Wireless Mouse","quantity":1,"unitPrice":25.00}]}
+'@
+$cancelId = ((PostJson $cancelJson).Body | ConvertFrom-Json).id
+$cancelled = (curl.exe -s -X POST "$orders/$cancelId/cancel") | ConvertFrom-Json
+Check "cancel a pending order" "CANCELLED" $cancelled.status
+
+# 22. cancelledAt is populated on the way out
+Check "cancel sets cancelledAt" "True" ([string]($null -ne $cancelled.cancelledAt))
+
+# 23. Cancelling twice -> 409, not a silent success
+Check "cancel an already cancelled order" "409" (PostStatus "$orders/$cancelId/cancel")
+
+# 24. The conflict names the status the order is actually in
+$conflict = (curl.exe -s -X POST "$orders/$cancelId/cancel") | ConvertFrom-Json
+Check "conflict names the current status" `
+    "Order can be cancelled only while PENDING. Current status: CANCELLED" $conflict.message
+
+# 25. The cancelled order is reachable through the status filter
+$cancelledList = (curl.exe -s "$orders`?status=CANCELLED") | ConvertFrom-Json
+Check "cancelled order appears in the filter" "True" ([string]($cancelledList.content.id -contains $cancelId))
+
+# 26. Cancel an unknown id -> 404, never a conflict
+Check "cancel unknown id" "404" (PostStatus "$orders/11111111-2222-3333-4444-555555555555/cancel")
+
+# 27. Cancel a malformed uuid -> 400
+Check "cancel malformed uuid" "400" (PostStatus "$orders/not-a-uuid/cancel")
 
 Write-Host ""
 Write-Host "passed=$script:pass failed=$script:fail"

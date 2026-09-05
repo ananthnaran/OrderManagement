@@ -2,8 +2,8 @@
 
 Living progress tracker for the Ecommerce Order Processing System. Updated at the end of each sprint.
 
-**Last updated:** Friday, 4 September 2026, after Sprint 2
-**Suite:** 76 tests, 0 failures, 0 skipped (`gradlew clean test`)
+**Last updated:** Friday, 4 September 2026, after Sprint 3
+**Suite:** 107 tests, 0 failures, 0 skipped (`gradlew clean test`)
 
 Plan: [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) · Design: [`DESIGN.md`](./DESIGN.md) · Callable examples: [`API_EXAMPLES.md`](./API_EXAMPLES.md)
 
@@ -15,11 +15,11 @@ Plan: [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) · Design: [`DESIGN.md`](./DESIGN.md)
 |--------|------|--------------|--------|-------|
 | **1** | Foundation and walking skeleton | 1, 2 | **Done** | 23 |
 | **2** | Listing, filtering, pagination | 5 | **Done** | +53 → 76 |
-| **3** | Cancellation and safe state transitions | 6 | Not started | — |
+| **3** | Cancellation and safe state transitions | 6 | **Done** | +31 → 107 |
 | **4** | Background promotion job | 4 | Not started | — |
 | **5** | API docs, README, hardening | extras | Not started | — |
 
-Progress: **2 of 5 sprints**, **3 of 6 requirements** fully delivered.
+Progress: **3 of 5 sprints**, **4 of 6 requirements** fully delivered.
 
 ---
 
@@ -29,10 +29,10 @@ Progress: **2 of 5 sprints**, **3 of 6 requirements** fully delivered.
 |---|-------------|-------|----------|
 | 1 | Create an order with multiple items | **Live** | `POST /api/v1/orders` → `201`; totals computed server-side |
 | 2 | Retrieve order by order ID | **Live** | `GET /api/v1/orders/{orderId}` → `200` / `404` / `400` |
-| 3 | Statuses `PENDING`…`DELIVERED` | **Modelled** | Full five-value enum persisted as string; `PENDING` set on create; the rest activate in Sprints 3–4 |
+| 3 | Statuses `PENDING`…`DELIVERED` | **Modelled** | Full five-value enum persisted as string; `PENDING` on create and `CANCELLED` on cancel are live transitions; `PROCESSING` activates in Sprint 4 |
 | 4 | Background `PENDING` → `PROCESSING` each minute | Not started | Sprint 4 |
 | 5 | List all orders, optional status filter | **Live** | `GET /api/v1/orders`, `?status=`, paging and sorting |
-| 6 | Cancel only when `PENDING` | Not started | Sprint 3 |
+| 6 | Cancel only when `PENDING` | **Live** | `POST /api/v1/orders/{orderId}/cancel` → `200` / `409` / `404` / `400`, refused in SQL |
 
 Requested extras: pagination **done** (Sprint 2); Swagger UI and README still open (Sprint 5).
 
@@ -47,8 +47,9 @@ Requested extras: pagination **done** (Sprint 2); Swagger UI and README still op
 | `GET` | `/api/v1/orders` | `200` with the pagination envelope |
 | `GET` | `/api/v1/orders?status=PENDING` | Filtered; `400` on an invalid or wrongly cased status |
 | `GET` | `/api/v1/orders?page=0&size=2&sort=totalAmount,asc` | Paged and sorted; `400` on a non-whitelisted sort property |
+| `POST` | `/api/v1/orders/{orderId}/cancel` | `200` with the cancelled order; `409` once it has left `PENDING`; `404` unknown ID; `400` malformed UUID |
 
-Not yet routed: `POST /api/v1/orders/{id}/cancel` (Sprint 3) and `/swagger-ui.html` (Sprint 5).
+Not yet routed: `/swagger-ui.html` (Sprint 5).
 
 ---
 
@@ -116,26 +117,64 @@ Seeded three orders and confirmed: the envelope reports `totalElements: 3`, `tot
 
 ---
 
-## 6. Test inventory
+## 6. Sprint 3 — Done
 
-| Suite | Tests | Covers |
-|-------|-------|--------|
-| `OrderQueryParamsTest` | 23 | Status parsing, sort whitelist, paging bounds, clamping |
-| `OrderControllerTest` | 21 | Every status code and JSON shape for all three endpoints |
-| `OrderServiceImplTest` | 12 | Totals, rounding, duplicate SKUs, filter routing, envelope metadata |
-| `OrderRepositoryTest` | 11 | Cascade, `orphanRemoval`, filtering, paging, sorting, index creation |
-| `OrderListIntegrationTest` | 7 | HTTP → H2 → HTTP for filtering, slicing and ordering |
-| `OrderListQueryCountTest` | 1 | N+1 regression guard |
-| `OrderManagementSystemApplicationTests` | 1 | Context loads |
-| **Total** | **76** | 0 failures, 0 skipped |
+Requirement 6. All 6 planned tasks complete. Suite grew from 76 to **107** tests.
+
+| Task | Outcome |
+|------|---------|
+| 3.1 | `InvalidOrderStateException` with a `cannotCancel(status)` factory, separate from `OrderNotFoundException` |
+| 3.2 | `cancelIfInStatus(id, expectedStatus, now)` — one conditional `UPDATE`, `@Modifying(clearAutomatically, flushAutomatically)` |
+| 3.3 | Service decides on the affected row count; on `0` it re-reads to tell `404` from `409` |
+| 3.4 | `InvalidOrderStateException` → `409 Conflict` in the existing advice |
+| 3.5 | `POST /api/v1/orders/{orderId}/cancel` |
+| 3.6 | 31 new tests: repository conditional-update branches, service `409`/`404`, controller status codes, 9-case cancel integration suite |
+
+### 6.1 The rule lives in SQL, not in an `if`
+
+The whole point of the sprint. Cancel issues one statement:
+
+```sql
+UPDATE orders
+   SET status = 'CANCELLED', cancelled_at = ?, updated_at = ?, version = version + 1
+ WHERE id = ? AND status = 'PENDING';
+```
+
+The affected row count is the decision. `1` means cancelled. `0` means either no such order or one that has already advanced, and only then does the service re-read to choose between `404` and `409`. The tempting `if (status == PENDING) save(...)` would leave a window in which Sprint 4's promotion job could resurrect a cancelled order, which is exactly the bug §5.4 of the design exists to prevent.
+
+`OrderRepositoryTest` proves the predicate does the refusing: the update returns `0` for `PROCESSING`, `SHIPPED`, `DELIVERED` and `CANCELLED` rows, and each row keeps its original status, `cancelledAt` and `version`.
+
+### 6.2 Two JPA traps that were designed around
+
+- **Bulk JPQL bypasses the persistence context.** Without `clearAutomatically`, the response would be mapped from a cached entity that still said `PENDING`. The service re-reads after the update, and the test asserting the response says `CANCELLED` would fail if the flag were dropped.
+- **Bulk updates bypass `@Version` and entity callbacks.** `version` and `updated_at` are therefore advanced inside the statement, and a repository test asserts `version` really did increment.
+
+### 6.3 Verified live
+
+Against a running app: cancelling a `PENDING` order returned `200` with `status: CANCELLED` and `cancelledAt` equal to `updatedAt`; a second cancel returned `409` with `"Current status: CANCELLED"`; an unknown UUID returned `404`; `not-a-uuid` returned `400`; and the order moved from the `PENDING` filter to the `CANCELLED` one. The smoke scripts grew from 22 to 29 checks and all pass.
 
 ---
 
-## 7. Open items
+## 7. Test inventory
+
+| Suite | Tests | Covers |
+|-------|-------|--------|
+| `OrderControllerTest` | 28 | Every status code and JSON shape for all four endpoints |
+| `OrderQueryParamsTest` | 23 | Status parsing, sort whitelist, paging bounds, clamping |
+| `OrderServiceImplTest` | 20 | Totals, rounding, duplicate SKUs, filter routing, cancel row-count branches |
+| `OrderRepositoryTest` | 18 | Cascade, `orphanRemoval`, filtering, paging, sorting, indexes, conditional cancel |
+| `OrderCancelIntegrationTest` | 9 | HTTP → H2 → HTTP for cancel, double cancel, advanced orders, filter movement |
+| `OrderListIntegrationTest` | 7 | HTTP → H2 → HTTP for filtering, slicing and ordering |
+| `OrderListQueryCountTest` | 1 | N+1 regression guard |
+| `OrderManagementSystemApplicationTests` | 1 | Context loads |
+| **Total** | **107** | 0 failures, 0 skipped |
+
+---
+
+## 8. Open items
 
 | Item | Where it lands |
 |------|----------------|
-| Cancel endpoint with the status-conditioned update | Sprint 3 |
 | Scheduled `PENDING` → `PROCESSING` promotion | Sprint 4 |
 | The cancel-versus-promote race regression test | Sprint 4 (needs both sides present) |
 | Swagger UI (`springdoc` **3.1.0** — the `2.8.x` line is Boot 3 only) | Sprint 5 |
@@ -144,7 +183,7 @@ Seeded three orders and confirmed: the envelope reports `totalElements: 3`, `tot
 
 ---
 
-## 8. How to verify the current state
+## 9. How to verify the current state
 
 ```powershell
 # Build machine notes: JAVA_HOME must be set, and Avast's TLS interception
@@ -156,4 +195,4 @@ $env:JAVA_HOME = "C:\Users\ACER\.jdks\graalvm-ce-25.0.2"
 .\docs\smoke-test.ps1
 ```
 
-`bash docs/smoke-test.sh` is the equivalent on a Unix shell. Data lives in an in-memory H2 database, so restarting the app clears every order.
+`bash docs/smoke-test.sh` is the equivalent on a Unix shell. Both run 29 checks and exit non-zero on the first mismatch. Data lives in an in-memory H2 database, so restarting the app clears every order.
